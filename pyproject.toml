@@ -1,0 +1,16 @@
+[project]
+name = "caddy-webhook"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "discord-webhook>=1.3.1",
+    "docker>=7.1.0",
+    "dotenv>=0.9.9",
+    "fastapi[standard]>=0.115.8",
+    "gitpython>=3.1.44",
+    "httpx>=0.28.1",
+    "logfire[fastapi,httpx,sqlite3]>=3.6.1",
+    "uvicorn>=0.34.0",
+]
