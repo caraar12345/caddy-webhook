@@ -1,0 +1,23 @@
+name: "caddy-webhook"
+version: "0.1.0"
+slug: "caddy_webhook"
+description: "A description of my add-on"
+arch:
+  - amd64
+startup: "services"
+boot: "auto"
+options:
+  logfire_token: null
+  discord_webhook_url: null
+  notify_discord_user: null
+  github_webhook_secret: null
+schema:
+  logfire_token: password
+  discord_webhook_url: url
+  notify_discord_user: int
+  github_webhook_secret: password
+#image: "aaroncarson/caddy-webhook"
+docker_api: true
+map:
+  - ssl
+  - share:rw

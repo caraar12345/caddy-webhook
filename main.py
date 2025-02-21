@@ -1,24 +1,42 @@
 import hashlib
 import hmac
+import json
+import os
 
 import docker
-import dotenv
 import git
 import logfire
 from discord_webhook import DiscordEmbed, DiscordWebhook
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-GITHUB_REPO = "caraar12345/infra-caddy"
-GITHUB_BRANCH = "main"
-GITHUB_WEBHOOK_SECRET = dotenv.get_key(".env", "GITHUB_WEBHOOK_SECRET")
+GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
 
-# create a fastapi app, see https://fastapi.tiangolo.com/reference/fastapi/
+config_path = "/data/config.json"
+if os.path.exists(config_path):
+    with open(config_path) as config_file:
+        config_data = json.load(config_file)
+
+        LOGFIRE_TOKEN = config_data["logfire_token"]
+        DISCORD_WEBHOOK_URL = config_data["discord_webhook_url"]
+        GITHUB_WEBHOOK_SECRET = config_data["github_webhook_secret"]
+        NOTIFY_DISCORD_USER = config_data["notify_discord_user"]
+
+else:
+    logfire.info("Config file not found, using environment variables")
+    load_dotenv()
+
+    LOGFIRE_TOKEN = os.getenv("LOGFIRE_TOKEN")
+    DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+    GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
+    NOTIFY_DISCORD_USER = os.getenv("NOTIFY_DISCORD_USER")
+
 app = FastAPI()
-webhook = DiscordWebhook(url=dotenv.get_key(".env", "DISCORD_WEBHOOK_URL"))
+webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
 
 # configure logfire
-logfire.configure(token=dotenv.get_key(".env", "LOGFIRE_TOKEN"))
+logfire.configure(token=LOGFIRE_TOKEN)
 logfire.instrument_fastapi(app, capture_headers=True)
 
 
@@ -111,7 +129,9 @@ async def github_webhook(request: Request):
             },
         )
     except Exception as e:
-        description += f"""<@!{dotenv.get_key(".env", "NOTIFY_DISCORD_USER")}> - Invalid Caddyfile.\n```\n{str(e)}\n```"""
+        description += (
+            f"""<@!{NOTIFY_DISCORD_USER}> - Invalid Caddyfile.\n```\n{str(e)}\n```"""
+        )
         embed = DiscordEmbed(
             title="Caddy repo updated", description=description, color="ff005e"
         )
