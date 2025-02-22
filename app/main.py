@@ -63,11 +63,10 @@ async def github_webhook(request: Request):
     try:
         # Perform git pull on /share/caddy directory
         repo = git.Repo("/share/caddy")
-        with repo.git.custom_environment(
-            GIT_SSH_COMMAND="ssh -i /ssl/.ssh/id_ed25519 -o UserKnownHostsFile=/ssl/.ssh/github.com.hostkey"
-        ):
-            origin = repo.remotes.origin
-            origin.pull()
+        ssh_cmd = 'ssh -i /ssl/.ssh/id_ed25519 -o UserKnownHostsFile=/ssl/.ssh/github.com.hostkey'
+        with repo.git.custom_environment(GIT_SSH_COMMAND=ssh_cmd):
+            logfire.info("Pulling repo...")
+            logfire.debug(repo.remotes["main"].pull())
 
         main_branch = repo.heads.main
 
@@ -130,9 +129,10 @@ async def github_webhook(request: Request):
             },
         )
     except Exception as e:
-        description += (
+        description = (
             f"""<@!{NOTIFY_DISCORD_USER}> - Invalid Caddyfile.\n```\n{str(e)}\n```"""
         )
+
         embed = DiscordEmbed(
             title="Caddy repo updated", description=description, color="ff005e"
         )
