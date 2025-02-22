@@ -13,7 +13,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
-
+print(os.getcwd())
+print(os.listdir())
+print(os.listdir("/data"))
+print(os.listdir("/data/config.json"))
 config_path = "/data/config.json"
 if os.path.exists(config_path):
     with open(config_path) as config_file:
