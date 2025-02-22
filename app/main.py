@@ -9,7 +9,7 @@ import git
 import logfire
 from discord_webhook import DiscordEmbed, DiscordWebhook
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 
 config_path = "/data/options.json"
@@ -41,6 +41,48 @@ logfire.configure(token=LOGFIRE_TOKEN)
 logfire.instrument_fastapi(app, capture_headers=True)
 
 
+def send_discord_success(repo: git.Repo, prev_commit: str, new_commit: str):
+    prev_commit_short = prev_commit[:7]
+    new_commit_short = new_commit[:7]  
+    commits = list(repo.iter_commits(f"{prev_commit}..{new_commit}~1"))
+    new_commit_msg = commits[0].message.splitlines()[0]
+    prev_commit_msg = commits[-1].message.splitlines()[0]
+    
+    branch = repo.heads.main
+    prcu_diff = branch.commit.diff("HEAD~1")
+    num_changed = len(prcu_diff)
+    changed_files = []
+
+    newline = "\n"
+
+    for file in prcu_diff:
+        if file.a_path == file.b_path:
+            changed_files.append(file.a_path)
+        else:
+            changed_files.append(f"{file.a_path} ==> {file.b_path}")
+
+    description = f"""{num_changed} files changed\n{newline.join(f"- `{file_path}`" for file_path in changed_files)}"""
+
+    embed = DiscordEmbed(
+        title="Caddy repo updated", description=description, color="00ff44"
+    )
+
+    embed.add_embed_field(
+        name="Current commit",
+        value=f"{new_commit_msg} - [{new_commit_short}](https://github.com/caraar12345/infra-caddy/commit/{new_commit})",
+        inline=False,
+    )
+
+    embed.add_embed_field(
+        name="Previous commit",
+        value=f"{prev_commit_msg} - [{prev_commit_short}](https://github.com/caraar12345/infra-caddy/commit/{prev_commit})",
+        inline=False,
+    )
+
+    webhook.add_embed(embed)
+    webhook.execute()
+
+
 # Configuration
 def verify_signature(payload_body: bytes, signature_header: str) -> bool:
     if not signature_header:
@@ -63,69 +105,33 @@ async def github_webhook(request: Request):
     try:
         # Perform git pull on /share/caddy directory
         repo = git.Repo("/share/caddy")
-        ssh_cmd = 'ssh -i /ssl/.ssh/id_ed25519 -o UserKnownHostsFile=/ssl/.ssh/github.com.hostkey'
+        prev_commit = repo.head.commit.hexsha
+
+        ssh_cmd = "ssh -i /ssl/.ssh/id_ed25519 -o UserKnownHostsFile=/ssl/.ssh/github.com.hostkey"
         with repo.git.custom_environment(GIT_SSH_COMMAND=ssh_cmd):
             logfire.info("Pulling repo...")
-            logfire.debug(str(repo.remotes["main"].pull()))
+            repo.remotes["main"].pull()
+            logfire.debug("New commit: " + repo.head.commit.hexsha[:7])
 
-        main_branch = repo.heads.main
+        new_commit = repo.head.commit.hexsha
+
+        BackgroundTasks.add_task(
+            send_discord_success, repo.head, prev_commit, new_commit
+        )
 
         # Send SIGHUP to the Docker container
         client = docker.from_env()
         container = client.containers.get(CADDY_CONTAINER_NAME)
         container.kill(signal="SIGHUP")
 
-        main_branch_log = main_branch.log()
-
-        previous_commit = main_branch_log[-2][1]
-        pc_message = main_branch_log[-2][4].split(": ")[1]
-        current_commit = main_branch_log[-1][1]
-        cc_message = main_branch_log[-1][4].split(": ")[1]
-
-        prev_commit_short = previous_commit[:7]
-        cur_commit_short = current_commit[:7]
-
-        prcu_diff = main_branch.commit.diff("HEAD~1")
-        num_changed = len(prcu_diff)
-        changed_files = []
-
-        newline = "\n"
-
-        for file in prcu_diff:
-            if file.a_path == file.b_path:
-                changed_files.append(file.a_path)
-            else:
-                changed_files.append(f"{file.a_path} ==> {file.b_path}")
-
-        description = f"""{num_changed} files changed\n{newline.join(f"- `{file_path}`" for file_path in changed_files)}"""
-
-        embed = DiscordEmbed(
-            title="Caddy repo updated", description=description, color="00ff44"
-        )
-
-        embed.add_embed_field(
-            name="Current commit",
-            value=f"{cc_message} - [{cur_commit_short}](https://github.com/caraar12345/infra-caddy/commit/{current_commit})",
-            inline=False,
-        )
-
-        embed.add_embed_field(
-            name="Previous commit",
-            value=f"{pc_message} - [{prev_commit_short}](https://github.com/caraar12345/infra-caddy/commit/{previous_commit})",
-            inline=False,
-        )
-
-        webhook.add_embed(embed)
-        webhook.execute()
-
         logfire.info(
-            f"Successfully pulled latest changes from GitHub ({prev_commit_short}) and sent SIGHUP to container"
+            f"Successfully pulled latest changes from GitHub ({new_commit[:7]}) and sent SIGHUP to container"
         )
 
         return JSONResponse(
             status_code=200,
             content={
-                "message": f"Successfully pulled latest changes from GitHub ({prev_commit_short}) and sent SIGHUP to container"
+                "message": f"Successfully pulled latest changes from GitHub ({new_commit[:7]}) and sent SIGHUP to container"
             },
         )
     except Exception as e:
