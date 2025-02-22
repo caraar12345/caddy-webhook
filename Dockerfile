@@ -8,7 +8,7 @@ COPY . /app
 
 # Install the application dependencies.
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends git \
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client \
     && rm -rf /var/lib/apt/lists/* && apt-get clean \
     && uv sync --frozen --no-cache
 
