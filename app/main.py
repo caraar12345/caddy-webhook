@@ -42,14 +42,16 @@ logfire.instrument_fastapi(app, capture_headers=True)
 
 
 def send_discord_success(repo: git.Repo, prev_commit: str, new_commit: str):
+    logfire.debug("Posting success to Discord...", attributes={"new_commit": new_commit, "prev_commit": prev_commit})
+
     prev_commit_short = prev_commit[:7]
     new_commit_short = new_commit[:7]  
     commits = list(repo.iter_commits(f"{prev_commit}..{new_commit}~1"))
     new_commit_msg = commits[0].message.splitlines()[0]
     prev_commit_msg = commits[-1].message.splitlines()[0]
-    
+
     branch = repo.heads.main
-    prcu_diff = branch.commit.diff("HEAD~1")
+    prcu_diff = branch.commit.diff(f"{new_commit}~1")
     num_changed = len(prcu_diff)
     changed_files = []
 
@@ -80,8 +82,10 @@ def send_discord_success(repo: git.Repo, prev_commit: str, new_commit: str):
     )
 
     webhook.add_embed(embed)
-    webhook.execute()
-
+    try:
+        webhook.execute()
+    except Exception:
+        logfire.error("Failed to post success to Discord", _exc_info=True)
 
 # Configuration
 def verify_signature(payload_body: bytes, signature_header: str) -> bool:
@@ -116,7 +120,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         new_commit = repo.head.commit.hexsha
 
         background_tasks.add_task(
-            send_discord_success, repo.head, prev_commit, new_commit
+            send_discord_success, repo, prev_commit, new_commit
         )
 
         # Send SIGHUP to the Docker container
