@@ -49,7 +49,7 @@ def send_discord_success(repo: git.Repo, prev_commit: str, new_commit: str):
     
     prev_commit_short = prev_commit[:7]
     new_commit_short = new_commit[:7]  
-    commits = list(repo.iter_commits(f"{new_commit}..{prev_commit}~1"))
+    commits = list(repo.iter_commits(f"{new_commit}...{prev_commit}~1"))
     new_commit_msg = commits[0].message.splitlines()[0]
     prev_commit_msg = commits[-1].message.splitlines()[0]
 
