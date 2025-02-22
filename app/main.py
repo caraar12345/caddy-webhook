@@ -43,7 +43,10 @@ logfire.instrument_fastapi(app, capture_headers=True)
 
 def send_discord_success(repo: git.Repo, prev_commit: str, new_commit: str):
     logfire.debug("Posting success to Discord...", attributes={"new_commit": new_commit, "prev_commit": prev_commit})
-
+    if prev_commit == new_commit:
+        logfire.info("No changes detected in Caddy repo")
+        return
+    
     prev_commit_short = prev_commit[:7]
     new_commit_short = new_commit[:7]  
     commits = list(repo.iter_commits(f"{prev_commit}..{new_commit}~1"))
@@ -123,19 +126,25 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
             send_discord_success, repo, prev_commit, new_commit
         )
 
-        # Send SIGHUP to the Docker container
-        client = docker.from_env()
-        container = client.containers.get(CADDY_CONTAINER_NAME)
-        container.kill(signal="SIGHUP")
+        success_log = f"Successfully pulled latest changes from GitHub ({new_commit[:7]})"
 
-        logfire.info(
-            f"Successfully pulled latest changes from GitHub ({new_commit[:7]}) and sent SIGHUP to container"
-        )
+        if prev_commit != new_commit:
+            # Send SIGHUP to the Docker container
+            client = docker.from_env()
+            container = client.containers.get(CADDY_CONTAINER_NAME)
+            container.kill(signal="SIGHUP")
+            success_log += " and sent SIGHUP to container"
+        else:
+            success_log += " but no changes detected in Caddy repo"
+
+        logfire.info(success_log)
 
         return JSONResponse(
             status_code=200,
             content={
-                "message": f"Successfully pulled latest changes from GitHub ({new_commit[:7]}) and sent SIGHUP to container"
+                "message": success_log,
+                "new_commit": new_commit,
+                "prev_commit": prev_commit,
             },
         )
     except Exception as e:
