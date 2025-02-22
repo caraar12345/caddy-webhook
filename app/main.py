@@ -119,13 +119,13 @@ async def github_webhook(request: Request):
         webhook.execute()
 
         logfire.info(
-            "Successfully pulled latest changes from GitHub ({prev_commit_short}) and sent SIGHUP to container"
+            f"Successfully pulled latest changes from GitHub ({prev_commit_short}) and sent SIGHUP to container"
         )
 
         return JSONResponse(
             status_code=200,
             content={
-                "message": "Successfully pulled latest changes from GitHub ({prev_commit_short}) and sent SIGHUP to container"
+                "message": f"Successfully pulled latest changes from GitHub ({prev_commit_short}) and sent SIGHUP to container"
             },
         )
     except Exception as e:
