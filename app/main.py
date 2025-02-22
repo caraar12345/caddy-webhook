@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+import pprint
 
 import docker
 import git
@@ -22,6 +23,7 @@ if os.path.exists(config_path):
         DISCORD_WEBHOOK_URL = config_data["discord_webhook_url"]
         GITHUB_WEBHOOK_SECRET = config_data["github_webhook_secret"]
         NOTIFY_DISCORD_USER = config_data["notify_discord_user"]
+        CADDY_CONTAINER_NAME = config_data["caddy_container_name"]
 
 else:
     logfire.info("Config file not found, using environment variables")
@@ -31,6 +33,7 @@ else:
     DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
     GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
     NOTIFY_DISCORD_USER = os.getenv("NOTIFY_DISCORD_USER")
+    CADDY_CONTAINER_NAME = os.getenv("CADDY_CONTAINER_NAME")
 
 app = FastAPI()
 webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
@@ -58,7 +61,7 @@ async def github_webhook(request: Request):
     signature = request.headers.get("X-Hub-Signature-256")
     if not verify_signature(payload_body, signature):
         raise HTTPException(status_code=401, detail="Invalid signature")
-
+    pprint.pprint(json.loads(payload_body))
     try:
         # Perform git pull on /share/caddy directory
         repo = git.Repo("/share/caddy")
@@ -72,7 +75,7 @@ async def github_webhook(request: Request):
 
         # Send SIGHUP to the Docker container
         client = docker.from_env()
-        container = client.containers.get("d630ad5e_caddy-2")
+        container = client.containers.get(CADDY_CONTAINER_NAME)
         container.kill(signal="SIGHUP")
 
         main_branch_log = main_branch.log()

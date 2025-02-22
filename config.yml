@@ -11,11 +11,13 @@ options:
   discord_webhook_url: null
   notify_discord_user: null
   github_webhook_secret: null
+  caddy_container_name: d630ad5e_caddy-2
 schema:
   logfire_token: password
   discord_webhook_url: url
   notify_discord_user: int
   github_webhook_secret: password
+  caddy_container_name: str
 #image: "aaroncarson/caddy-webhook"
 docker_api: true
 map:
