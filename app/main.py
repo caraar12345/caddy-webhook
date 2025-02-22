@@ -95,7 +95,7 @@ def verify_signature(payload_body: bytes, signature_header: str) -> bool:
 
 
 @app.post("/webhook")
-async def github_webhook(request: Request):
+async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     # Verify GitHub webhook signature
     payload_body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256")
@@ -115,7 +115,7 @@ async def github_webhook(request: Request):
 
         new_commit = repo.head.commit.hexsha
 
-        BackgroundTasks.add_task(
+        background_tasks.add_task(
             send_discord_success, repo.head, prev_commit, new_commit
         )
 
@@ -145,7 +145,7 @@ async def github_webhook(request: Request):
         webhook.add_embed(embed)
         webhook.execute()
         logfire.error(
-            f"Failed to pull latest changes from GitHub or send SIGHUP to container: {str(e)}"
+            "Failed to pull latest changes from GitHub or send SIGHUP to container", _exc_info=True
         )
 
         return JSONResponse(
