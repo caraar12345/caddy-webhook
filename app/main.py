@@ -66,7 +66,7 @@ async def github_webhook(request: Request):
         ssh_cmd = 'ssh -i /ssl/.ssh/id_ed25519 -o UserKnownHostsFile=/ssl/.ssh/github.com.hostkey'
         with repo.git.custom_environment(GIT_SSH_COMMAND=ssh_cmd):
             logfire.info("Pulling repo...")
-            logfire.debug(repo.remotes["main"].pull())
+            logfire.debug(str(repo.remotes["main"].pull()))
 
         main_branch = repo.heads.main
 
