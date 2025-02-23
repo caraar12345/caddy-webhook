@@ -1,0 +1,8 @@
+---
+image: "ghcr.io/caraar12345/hass-addon-caddy-webhook/caddy-webhook-{arch}"
+build_from:
+  aarch64: "python:3.13-slim"
+  amd64: "python:3.13-slim"
+  armhf: "python:3.13-slim"
+  armv7: "python:3.13-slim"
+  i386: "python:3.13-slim"

@@ -1,4 +1,5 @@
-FROM python:3.13-slim
+ARG BUILD_FROM
+FROM $BUILD_FROM
 
 # Install uv.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
