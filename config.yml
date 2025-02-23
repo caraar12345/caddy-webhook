@@ -1,9 +1,13 @@
 name: "caddy-webhook"
-version: "0.1.0"
+version: "1.0.0"
 slug: "caddy_webhook"
-description: "A description of my add-on"
+description: "A very specific addon to handle specific webhooks from GitHub etc"
 arch:
   - amd64
+  - aarch64
+  - armv7
+  - armhf
+  - i386
 startup: "services"
 boot: "auto"
 options:
@@ -12,12 +16,22 @@ options:
   notify_discord_user: null
   github_webhook_secret: null
   caddy_container_name: d630ad5e_caddy-2
+  git_repo_path: /share/caddy
+  git_ssh_key_file: /ssl/.ssh/id_ed25519
+  git_ssh_known_hosts_file: /ssl/.ssh/github.com.hostkey
+  git_repo_url: https://github.com/caraar12345/infra-caddy
+  git_repo_branch: main
 schema:
   logfire_token: password
   discord_webhook_url: url
   notify_discord_user: int
   github_webhook_secret: password
   caddy_container_name: str
+  git_repo_path: str
+  git_ssh_key_file: str
+  git_ssh_known_hosts_file: str
+  git_repo_url: str
+  git_repo_branch: str
 #image: "aaroncarson/caddy-webhook"
 docker_api: true
 map:
