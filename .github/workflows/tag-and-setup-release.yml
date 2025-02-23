@@ -16,8 +16,9 @@ jobs:
           echo "version=v$VERSION" >> $GITHUB_OUTPUT
       - name: Check if tag exists
         id: check_tag
+        env:
+          VERSION: ${{ steps.read_version.outputs.version }}
         run: |
-          VERSION=${{ steps.read_version.outputs.version }}
           if git rev-parse "$VERSION" >/dev/null 2>&1; then
             echo "Tag $VERSION exists."
             echo "tag=true" >> $GITHUB_OUTPUT
@@ -28,15 +29,17 @@ jobs:
       - name: Create tag if it does not exist
         id: create_tag
         if: steps.check_tag.outputs.tag == 'false'
+        env:
+          VERSION: ${{ steps.read_version.outputs.version }}
         run: |-
-          VERSION=${{ steps.read_version.outputs.version }}
           git tag "$VERSION"
           git push origin "$VERSION"
           echo "Tag $VERSION created."
           echo "tag=true" >> $GITHUB_OUTPUT
       - name: Trigger build workflow
         if: steps.create_tag.outputs.tag == 'true'
-        run: |
-          gh workflow run build-and-deploy.yaml --ref $VERSION
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.read_version.outputs.version }}
+        run: |
+          gh workflow run build-and-deploy.yaml --ref $VERSION
