@@ -1,7 +1,7 @@
 [project]
 name = "caddy-webhook"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.0.3"
+description = "An overcomplicated webhook server to pull updates to a Caddy repo"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

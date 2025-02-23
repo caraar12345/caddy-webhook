@@ -29,7 +29,7 @@ if os.path.exists(config_path):
         GIT_REPO_BRANCH = config_data["git_repo_branch"]
 
 else:
-    logfire.info("Config file not found, using environment variables")
+    logfire.info("HA config file not found, using environment variables")
     load_dotenv()
 
     LOGFIRE_TOKEN = os.getenv("LOGFIRE_TOKEN")

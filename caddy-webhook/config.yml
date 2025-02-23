@@ -1,7 +1,7 @@
 name: "caddy-webhook"
-version: "1.0.2"
+version: "1.0.3"
 slug: "caddy_webhook"
-description: "A very specific addon to handle specific webhooks from GitHub etc"
+description: "An overcomplicated addon to handle specific webhooks from GitHub etc"
 arch:
   - amd64
   - aarch64
