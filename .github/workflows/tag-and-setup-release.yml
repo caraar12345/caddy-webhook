@@ -19,6 +19,7 @@ jobs:
         env:
           VERSION: ${{ steps.read_version.outputs.version }}
         run: |
+          git fetch --tags
           if git rev-parse "$VERSION" >/dev/null 2>&1; then
             echo "Tag $VERSION exists."
             echo "tag=true" >> $GITHUB_OUTPUT
