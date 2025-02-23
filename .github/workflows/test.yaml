@@ -14,6 +14,6 @@ jobs:
       with:
         args: |
           --test \
-          --all \
+          --aarch64 --amd64 \
           --target caddy-webhook \
           --docker-hub ghcr.io/caraar12345/hass-addon-caddy-webhook
