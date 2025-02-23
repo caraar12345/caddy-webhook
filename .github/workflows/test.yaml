@@ -1,6 +1,9 @@
 name: "Test"
 
-on: [ push, pull_request ]
+on:
+  push:
+    tags-ignore:
+    - 'v*'
 
 jobs:
   build:
@@ -16,4 +19,5 @@ jobs:
           --test \
           --aarch64 --amd64 \
           --target caddy-webhook \
-          --docker-hub ghcr.io/caraar12345/caddy-webhook/hass-caddy-webhook
+          --docker-hub ghcr.io/caraar12345/caddy-webhook \
+          --image hass-{arch}
