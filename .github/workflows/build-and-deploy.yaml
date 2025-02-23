@@ -37,9 +37,15 @@ jobs:
             --docker-hub ghcr.io/${{github.repository}} \
             --image hass-{arch}
       - name: Repository Dispatch
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.REPO_DISPATCH_PAT }}
-          repository: caraar12345/home-assistant-addons
-          event-type: addon-update
-          client-payload: '{"addon": "caddy-webhook", "version": "${{ github.ref_name }}" }'
+        run: |
+          echo "Triggering addon update in home-assistant-addons"
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/caraar12345/home-assistant-addons/dispatches \
+            -f "event_type=addon_update" \
+            -F "client_payload[addon]=caddy-webhook" \
+            -F "client_payload[version]=${{ github.ref_name }}"
+        env:
+          GH_TOKEN: ${{ secrets.REPO_DISPATCH_PAT }}
