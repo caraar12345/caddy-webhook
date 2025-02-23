@@ -99,7 +99,7 @@ def send_discord_success(repo: git.Repo, prev_commit: str, new_commit: str):
 
     webhook.add_embed(embed)
     try:
-        webhook.execute(remove_files=True, remove_embeds=True)
+        webhook.execute(remove_embeds=True)
     except Exception:
         logfire.error("Failed to post success to Discord", _exc_info=True)
 
@@ -168,7 +168,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
             title="Repo updated", description=description, color="ff005e"
         )
         webhook.add_embed(embed)
-        webhook.execute(remove_files=True, remove_embeds=True)
+        webhook.execute(remove_embeds=True)
         logfire.error(
             "Failed to pull latest changes from GitHub or send SIGHUP to container",
             _exc_info=True,
