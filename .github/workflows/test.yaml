@@ -2,10 +2,10 @@ name: "Test"
 
 on:
   push:
-    tags-ignore:
-    - 'v*'
     branches:
-    - **
+      - '*'
+    tags-ignore:
+      - 'v*'
 
 jobs:
   build:
