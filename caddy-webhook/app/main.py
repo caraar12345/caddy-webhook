@@ -82,7 +82,9 @@ def send_discord_success(repo: git.Repo, prev_commit: str, new_commit: str):
     description = f"""{num_changed} files changed\n{newline.join(f"- `{file_path}`" for file_path in changed_files)}"""
 
     embed = DiscordEmbed(
-        title="Caddy repo updated", description=description, color="00ff44"
+        title="<@!{NOTIFY_DISCORD_USER}> - Caddy repo updated",
+        description=description,
+        color="00ff44",
     )
 
     embed.add_embed_field(
