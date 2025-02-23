@@ -5,9 +5,6 @@ description: "A very specific addon to handle specific webhooks from GitHub etc"
 arch:
   - amd64
   - aarch64
-  - armv7
-  - armhf
-  - i386
 startup: "services"
 boot: "auto"
 options:

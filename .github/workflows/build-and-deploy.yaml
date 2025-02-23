@@ -31,6 +31,6 @@ jobs:
       uses: home-assistant/builder@master
       with:
         args: |
-          --all \
+          --aarch64 --amd64 \
           --target caddy-webhook \
           --docker-hub ghcr.io/caraar12345/hass-addon-caddy-webhook
