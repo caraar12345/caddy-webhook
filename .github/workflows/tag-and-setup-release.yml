@@ -44,3 +44,12 @@ jobs:
           VERSION: ${{ steps.read_version.outputs.version }}
         run: |-
           gh workflow run build-and-deploy.yaml --ref $VERSION
+        
+      - name: Trigger test build workflow
+        if: steps.check_tag.outputs.tag == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.read_version.outputs.version }}
+        run: |-
+          gh workflow run test-build.yaml --ref $VERSION
+

@@ -1,8 +1,5 @@
 name: "Build and deploy HA addon"
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 jobs:
