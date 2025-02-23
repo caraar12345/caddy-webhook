@@ -41,5 +41,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.read_version.outputs.version }}
-        run: |
+        run: |-
           gh workflow run build-and-deploy.yaml --ref $VERSION
