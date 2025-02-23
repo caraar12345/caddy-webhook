@@ -32,7 +32,7 @@ schema:
   git_ssh_known_hosts_file: str
   git_repo_url: str
   git_repo_branch: str
-#image: "aaroncarson/caddy-webhook"
+image: "ghcr.io/caraar12345/hass-addon-caddy-webhook/caddy-webhook-{arch}"
 docker_api: true
 map:
   - ssl
