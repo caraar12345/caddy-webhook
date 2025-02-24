@@ -82,7 +82,7 @@ def send_discord_success(repo: git.Repo, prev_commit: str, new_commit: str):
     description = f"""{num_changed} files changed\n{newline.join(f"- `{file_path}`" for file_path in changed_files)}"""
 
     embed = DiscordEmbed(
-        title="<@!{NOTIFY_DISCORD_USER}> - Caddy repo updated",
+        title=f"<@!{NOTIFY_DISCORD_USER}> - Caddy repo updated",
         description=description,
         color="00ff44",
     )
@@ -148,8 +148,13 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
             # Send SIGHUP to the Docker container
             client = docker.from_env()
             container = client.containers.get(CADDY_CONTAINER_NAME)
-            container.kill(signal="SIGHUP")
-            success_log += " and sent SIGHUP to container"
+            container.exec_run(
+                ["/config/caddy", "reload", "-c", "/config/Caddyfile"],
+                stdout=False,
+                stderr=False,
+                workdir="/config",
+            )
+            success_log += " and reloaded Caddy's config"
         else:
             success_log += " but no changes detected in repo"
 
@@ -172,13 +177,13 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         webhook.add_embed(embed)
         webhook.execute(remove_embeds=True)
         logfire.error(
-            "Failed to pull latest changes from GitHub or send SIGHUP to container",
+            "Failed to pull latest changes from GitHub or reload Caddy's config",
             _exc_info=True,
         )
 
         return JSONResponse(
             status_code=500,
             content={
-                "message": f"Failed to pull latest changes from GitHub or send SIGHUP to container: {str(e)}"
+                "message": f"Failed to pull latest changes from GitHub or reload Caddy's config: {str(e)}"
             },
         )
