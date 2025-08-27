@@ -44,7 +44,10 @@ else:
     GIT_REPO_BRANCH = os.getenv("GIT_REPO_BRANCH")
 
 app = FastAPI()
-webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL)
+webhook = DiscordWebhook(
+    url=DISCORD_WEBHOOK_URL,
+    content=f"<@{NOTIFY_DISCORD_USER}>",
+)
 
 # configure logfire
 logfire.configure(token=LOGFIRE_TOKEN)
@@ -82,7 +85,7 @@ def send_discord_success(repo: git.Repo, prev_commit: str, new_commit: str):
     description = f"""{num_changed} files changed\n{newline.join(f"- `{file_path}`" for file_path in changed_files)}"""
 
     embed = DiscordEmbed(
-        title=f"<@{NOTIFY_DISCORD_USER}> - Caddy repo updated",
+        title="Caddy repo updated",
         description=description,
         color="00ff44",
     )
@@ -169,7 +172,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
             },
         )
     except Exception as e:
-        description = f"""<@!{NOTIFY_DISCORD_USER}> - Error when pulling or reloading.\n```\n{str(e)}\n```"""
+        description = f"""Error when pulling or reloading.\n```\n{str(e)}\n```"""
 
         embed = DiscordEmbed(
             title="Repo updated", description=description, color="ff005e"
