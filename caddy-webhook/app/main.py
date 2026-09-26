@@ -141,25 +141,28 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
         new_commit = repo.head.commit.hexsha
 
-        background_tasks.add_task(send_discord_success, repo, prev_commit, new_commit)
-
         success_log = (
             f"Successfully pulled latest changes from GitHub ({new_commit[:7]})"
         )
 
         if prev_commit != new_commit:
-            # Send SIGHUP to the Docker container
             client = docker.from_env()
             container = client.containers.get(CADDY_CONTAINER_NAME)
-            container.exec_run(
+            exit_code, output = container.exec_run(
                 ["/config/caddy", "reload", "-c", "/config/Caddyfile"],
-                stdout=False,
-                stderr=False,
                 workdir="/config",
             )
+            if exit_code != 0:
+                raise RuntimeError(
+                    f"caddy reload exited with code {exit_code}:\n"
+                    f"{output.decode(errors='replace')}"
+                )
             success_log += " and reloaded Caddy's config"
         else:
             success_log += " but no changes detected in repo"
+
+        # Only notify success once the reload has actually succeeded
+        background_tasks.add_task(send_discord_success, repo, prev_commit, new_commit)
 
         logfire.info(success_log)
 
@@ -172,10 +175,11 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
             },
         )
     except Exception as e:
-        description = f"""Error when pulling or reloading.\n```\n{str(e)}\n```"""
+        # Discord caps embed descriptions at 4096 chars; keep the tail, where caddy's error is
+        description = f"""Error when pulling or reloading.\n```\n{str(e)[-3500:]}\n```"""
 
         embed = DiscordEmbed(
-            title="Repo updated", description=description, color="ff005e"
+            title="Caddy repo update failed", description=description, color="ff005e"
         )
         webhook.add_embed(embed)
         webhook.execute(remove_embeds=True)
