@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from cryptography.x509 import Certificate, ExtensionNotFound
 from sigstore.errors import VerificationError
+from sigstore.hashes import Hashed
 from sigstore.models import Bundle
 from sigstore.verify import Verifier, policy
 
@@ -102,9 +103,13 @@ class Verified:
 
 
 def verify(
-    artifact: bytes, bundle_json: bytes, expected: Expected, verifier: Verifier | None = None
+    artifact: bytes | Hashed,
+    bundle_json: bytes,
+    expected: Expected,
+    verifier: Verifier | None = None,
 ) -> Verified:
-    """Raise VerificationError unless the bundle signs artifact as expected."""
+    """Raise VerificationError unless the bundle signs artifact (its bytes, or
+    its digest) as expected."""
     bundle = Bundle.from_json(bundle_json)
     (verifier or _production_verifier()).verify_artifact(artifact, bundle, policy_for(expected))
     try:

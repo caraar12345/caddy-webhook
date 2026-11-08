@@ -1,0 +1,8 @@
+{
+  "repo": "caraar12345/home-assistant-wall-dash",
+  "workflow": ".github/workflows/deploy.yaml",
+  "ref": "refs/pull/1/merge",
+  "run_id": 42484866548,
+  "merge_commit": "dbaad8018064f0b85e1e667e841a4c75644910e0",
+  "tarball_sha256": "7be992081c0bfcf8b0da5345add96695a8bf78e9769419f37714787ee4681c22"
+}

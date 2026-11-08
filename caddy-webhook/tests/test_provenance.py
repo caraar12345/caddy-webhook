@@ -107,3 +107,71 @@ def test_der_utf8_long_form():
     assert provenance._der_utf8(der_utf8(long)) == long
     with pytest.raises(VerificationError):
         provenance._der_utf8(b"\x04\x01x")
+
+
+# --- A real build: home-assistant-wall-dash PR #1's signed tarball -----------
+# Checked against Sigstore's live trust root (TUF), so it needs the network.
+
+FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(scope="module")
+def real_build():
+    import json
+
+    from sigstore.hashes import HashAlgorithm, Hashed
+
+    info = json.loads((FIXTURES / "wall-dash-pr1.json").read_text())
+    bundle = (FIXTURES / "wall-dash-pr1.sigstore.json").read_bytes()
+    digest = Hashed(algorithm=HashAlgorithm.SHA2_256, digest=bytes.fromhex(info["tarball_sha256"]))
+    try:
+        verifier = provenance._production_verifier()
+    except Exception as e:  # no network to Sigstore's TUF repository
+        pytest.skip(f"Sigstore trust root unavailable: {e}")
+    return info, bundle, digest, verifier
+
+
+def real_expected(info, **kw):
+    return provenance.Expected(
+        **{
+            "repo": info["repo"],
+            "workflow": info["workflow"],
+            "ref": info["ref"],
+            "run_id": info["run_id"],
+            **kw,
+        }
+    )
+
+
+def test_real_build_verifies(real_build):
+    info, bundle, digest, verifier = real_build
+    verified = provenance.verify(digest, bundle, real_expected(info), verifier=verifier)
+    assert verified.log_index
+    # A PR build signs GitHub's merge commit
+    provenance.verify(digest, bundle, real_expected(info, commit=info["merge_commit"]), verifier=verifier)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param(dict(ref="refs/heads/main"), id="as production"),
+        pytest.param(dict(ref="refs/pull/2/merge"), id="as another PR"),
+        pytest.param(dict(run_id=1), id="another run"),
+        pytest.param(dict(workflow=".github/workflows/other.yaml"), id="another workflow"),
+        pytest.param(dict(repo="caraar12345/caddy-webhook"), id="another repo"),
+        pytest.param(dict(commit="0" * 40), id="another commit"),
+    ],
+)
+def test_real_build_rejects_other_identities(real_build, change):
+    info, bundle, digest, verifier = real_build
+    with pytest.raises(VerificationError):
+        provenance.verify(digest, bundle, real_expected(info, **change), verifier=verifier)
+
+
+def test_real_bundle_rejects_other_bytes(real_build):
+    from sigstore.hashes import HashAlgorithm, Hashed
+
+    info, bundle, _, verifier = real_build
+    other = Hashed(algorithm=HashAlgorithm.SHA2_256, digest=bytes(32))
+    with pytest.raises(VerificationError):
+        provenance.verify(other, bundle, real_expected(info), verifier=verifier)
