@@ -1,7 +1,7 @@
 [project]
 name = "caddy-webhook"
-version = "1.0.9"
-description = "An overcomplicated webhook server to pull updates to a Caddy repo"
+version = "1.1.0"
+description = "An overcomplicated webhook server to pull updates to a Caddy repo and deploy Wall Dash"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -12,5 +12,17 @@ dependencies = [
     "gitpython>=3.1.44",
     "httpx>=0.28.1",
     "logfire[fastapi,httpx,sqlite3]>=3.6.1",
+    "sigstore==4.5.1",
     "uvicorn>=0.34.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.logfire]
+ignore_no_config = true

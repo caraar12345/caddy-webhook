@@ -1,7 +1,7 @@
 name: "caddy-webhook"
-version: "1.0.9"
+version: "1.1.0"
 slug: "caddy_webhook"
-description: "An overcomplicated addon to handle specific webhooks from GitHub etc"
+description: "An overcomplicated addon to handle specific webhooks from GitHub etc: Caddyfile updates and Wall Dash deploys"
 arch:
   - amd64
   - aarch64
@@ -18,6 +18,13 @@ options:
   git_ssh_known_hosts_file: /ssl/.ssh/github.com.hostkey
   git_repo_url: https://github.com/caraar12345/infra-caddy
   git_repo_branch: main
+  wall_dash_repo: caraar12345/home-assistant-wall-dash
+  wall_dash_branch: main
+  wall_dash_workflow: .github/workflows/deploy.yaml
+  wall_dash_www_dir: /homeassistant/www/wall-dash
+  wall_dash_integration_dir: /homeassistant/custom_components/wall_dash
+  wall_dash_preview_dir: /share/wall-dash/pr
+  wall_dash_preview_url: https://hass-new.adhd.energy/wall-dash/pr
 schema:
   logfire_token: password
   discord_webhook_url: url
@@ -29,8 +36,19 @@ schema:
   git_ssh_known_hosts_file: str
   git_repo_url: str
   git_repo_branch: str
+  wall_dash_github_token: password?
+  wall_dash_webhook_secret: password?
+  wall_dash_repo: str
+  wall_dash_branch: str
+  wall_dash_workflow: str
+  wall_dash_www_dir: str
+  wall_dash_integration_dir: str
+  wall_dash_preview_dir: str
+  wall_dash_preview_url: url
 image: "ghcr.io/caraar12345/caddy-webhook/hass-{arch}"
 docker_api: true
+homeassistant_api: true
 map:
   - ssl
   - share:rw
+  - homeassistant_config:rw

@@ -2,3 +2,5 @@
 .env
 .gitignore
 .git
+tests
+.pytest_cache
