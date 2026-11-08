@@ -12,6 +12,9 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app import wall_dash
+
+config_data = {}
 config_path = "/data/options.json"
 if os.path.exists(config_path):
     with open(config_path) as config_file:
@@ -42,6 +45,8 @@ else:
     GIT_SSH_KNOWN_HOSTS_FILE = os.getenv("GIT_SSH_KNOWN_HOSTS_FILE")
     GIT_REPO_URL = os.getenv("GIT_REPO_URL")
     GIT_REPO_BRANCH = os.getenv("GIT_REPO_BRANCH")
+
+WALL_DASH = wall_dash.load_settings(config_data)
 
 app = FastAPI()
 webhook = DiscordWebhook(
@@ -234,3 +239,30 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
                 "message": f"Failed to pull latest changes from GitHub or reload Caddy's config: {str(e)}"
             },
         )
+
+
+@app.post("/webhook/wall-dash")
+async def wall_dash_webhook(request: Request, background_tasks: BackgroundTasks):
+    """GitHub workflow_run webhook from home-assistant-wall-dash: deploy its build."""
+    payload_body = await request.body()
+    if not verify_signature(payload_body, request.headers.get("X-Hub-Signature-256")):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    if not WALL_DASH.github_token:
+        raise HTTPException(status_code=503, detail="wall_dash_github_token isn't set")
+
+    event = request.headers.get("X-GitHub-Event")
+    if event == "ping":
+        return {"message": "pong"}
+    payload = json.loads(payload_body)
+    ignored = wall_dash.should_deploy(event, payload, WALL_DASH)
+    if ignored:
+        logfire.info("Ignoring Wall Dash webhook: {reason}", reason=ignored)
+        return {"message": f"Ignored: {ignored}"}
+
+    run = payload["workflow_run"]
+    # GitHub gives up after 10 s; the outcome goes to Discord and logfire
+    background_tasks.add_task(wall_dash.deploy_run, run, WALL_DASH)
+    return JSONResponse(
+        status_code=202,
+        content={"message": "Deploying", "commit": run["head_sha"], "run": run["html_url"]},
+    )
