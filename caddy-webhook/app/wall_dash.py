@@ -1,33 +1,37 @@
-"""Deploy Wall Dash from its GitHub Actions build.
+"""Deploy Wall Dash from its signed GitHub Actions builds.
 
-github.com/caraar12345/home-assistant-wall-dash builds on every push to main and
-uploads one artifact, `wall-dash`, holding `wall-dash.tar.gz`:
+github.com/caraar12345/home-assistant-wall-dash's deploy workflow builds every
+push to main and every pull request, signs the tarball with Sigstore, and
+uploads one artifact, `wall-dash`:
 
-    www/                        -> /homeassistant/www/wall-dash  (served at /local/wall-dash/)
-    custom_components/wall_dash -> /homeassistant/custom_components/wall_dash
+    wall-dash.tar.gz              www/ and custom_components/wall_dash
+    wall-dash.tar.gz.sigstore.json
 
-GitHub sends a `workflow_run` webhook when the build finishes. We download the
-run's artifact with a read-only token and write it into HA's config, so nothing
-needs SSH into Home Assistant.
+GitHub's webhook only says "run N finished". Everything else comes from the
+API: the run (workflow, trigger, branch, conclusion, commit), then its artifact.
+The tarball must verify against its Sigstore bundle, pinned to this repo, the
+deploy workflow at the run's ref, and run N, before anything is unpacked.
 
-- www/ is overwritten in place, assets first and index.html/entry.json last, so a
-  page loading mid-deploy never points at files that aren't there yet. Old hashed
-  assets are kept until they're older than HA's 31-day /local/ cache, as the old
-  deploy.sh did, so a panel still running an old build keeps working.
-- The integration is swapped in whole, and only when it changed. HA needs a
-  restart to load it, so we raise a persistent notification saying so.
-- Every deploy fires `wall_dash_deployed` on HA's event bus, for automations
-  (e.g. pressing the Echo Show's reload button).
+- main (a push, or running the workflow by hand) deploys production:
+  www/ to /homeassistant/www/wall-dash (/local/wall-dash/), overwritten in
+  place with entry points last; assets no build has shipped for 31 days are
+  pruned. The integration is swapped in whole, only when it changed, with a
+  persistent notification asking for a restart. Fires `wall_dash_deployed`.
+- A pull request (from this repo) deploys a preview: www/ to
+  /share/wall-dash/pr/<n>/, swapped in whole, which Caddy serves internally at
+  hass-new.adhd.energy/wall-dash/pr/<n>/. Its emoji are a symlink to one
+  shared copy. The integration is never deployed from a PR.
+- Closing a PR removes its preview; every deploy also sweeps away previews of
+  PRs that aren't open any more.
 
-Pushes to the configured branch deploy; so does running the workflow by hand
-(workflow_dispatch) on any branch, to try a branch on the panels. Re-running an
-older run redeploys it, which is how to roll back.
+Re-running an older main run redeploys it, which is how to roll back.
 """
 
 from __future__ import annotations
 
 import filecmp
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -35,134 +39,199 @@ import tarfile
 import tempfile
 import threading
 import time
-import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 import logfire
-from discord_webhook import DiscordEmbed, DiscordWebhook
+from discord_webhook import DiscordEmbed
+
+from app import notify, provenance
+from app.github import GitHub
+from app.settings import NotifySettings, WallDashSettings
 
 ARTIFACT_NAME = "wall-dash"
 TARBALL_NAME = "wall-dash.tar.gz"
+BUNDLE_NAME = TARBALL_NAME + ".sigstore.json"
 ASSET_MAX_AGE = 31 * 86400
 # Written last, once everything they point at is in place
 ENTRY_FILES = {"index.html", "entry.json", "version.json"}
-
+SHARED_EMOJI = "_emoji"
 SUPERVISOR_CORE_API = "http://supervisor/core/api"
-GITHUB_API_HEADERS = {
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-}
-
-
-@dataclass(frozen=True)
-class Settings:
-    github_token: str | None
-    repo: str
-    branch: str
-    workflow: str
-    www_dir: str
-    integration_dir: str
-    discord_webhook_url: str | None
-    notify_discord_user: str | None
-
-
-def load_settings(options: dict) -> Settings:
-    """Settings from the add-on's options (or the environment, outside HA)."""
-
-    def opt(key: str, default: str | None = None) -> str | None:
-        value = options.get(key)
-        if value is None:
-            value = os.getenv(key.upper())
-        return value if value not in (None, "") else default
-
-    return Settings(
-        github_token=opt("wall_dash_github_token"),
-        repo=opt("wall_dash_repo", "caraar12345/home-assistant-wall-dash"),
-        branch=opt("wall_dash_branch", "main"),
-        workflow=opt("wall_dash_workflow", ".github/workflows/deploy.yaml"),
-        www_dir=opt("wall_dash_www_dir", "/homeassistant/www/wall-dash"),
-        integration_dir=opt(
-            "wall_dash_integration_dir", "/homeassistant/custom_components/wall_dash"
-        ),
-        discord_webhook_url=opt("discord_webhook_url"),
-        notify_discord_user=(
-            str(options["notify_discord_user"])
-            if options.get("notify_discord_user")
-            else os.getenv("NOTIFY_DISCORD_USER")
-        ),
-    )
-
-
-def should_deploy(event: str | None, payload: dict, settings: Settings) -> str | None:
-    """None if this webhook is a finished build to deploy, else why it's ignored."""
-    if event != "workflow_run":
-        return f"not a workflow_run event ({event})"
-    if payload.get("action") != "completed":
-        return f"run not completed ({payload.get('action')})"
-    repo = (payload.get("repository") or {}).get("full_name")
-    if repo != settings.repo:
-        return f"not the Wall Dash repo ({repo})"
-    run = payload.get("workflow_run") or {}
-    if run.get("path") != settings.workflow:
-        return f"not the deploy workflow ({run.get('path')})"
-    if run.get("conclusion") != "success":
-        return f"run didn't succeed ({run.get('conclusion')})"
-    # A hand-started run deploys whatever branch it was started on
-    if run.get("event") != "workflow_dispatch" and run.get("head_branch") != settings.branch:
-        return f"not {settings.branch} ({run.get('head_branch')})"
-    return None
-
-
-@dataclass(frozen=True)
-class DeployResult:
-    commit: str
-    branch: str
-    run_url: str
-    devices: list[str]
-    files_written: int
-    assets_pruned: int
-    integration_changed: bool
-
 
 _lock = threading.Lock()
 
 
-def deploy_run(run: dict, settings: Settings) -> None:
-    """Background task: deploy one finished run and report how it went."""
-    commit = run.get("head_sha", "")
-    with _lock, logfire.span("Deploying Wall Dash {commit}", commit=commit[:7]):
+# --- Which build is this? ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Production:
+    ref: str
+
+
+@dataclass(frozen=True)
+class Preview:
+    number: int | None  # None: look it up by branch
+
+    @property
+    def ref(self) -> str:
+        return f"refs/pull/{self.number}/merge"
+
+
+def classify(run: dict, settings: WallDashSettings) -> Production | Preview | str:
+    """What to deploy for a run (from the API), or why it's ignored."""
+    if run.get("path") != settings.workflow:
+        return f"not the deploy workflow ({run.get('path')})"
+    if (run.get("repository") or {}).get("full_name") != settings.repo:
+        return "not the Wall Dash repo"
+    if run.get("status") != "completed" or run.get("conclusion") != "success":
+        return f"run didn't succeed ({run.get('status')}/{run.get('conclusion')})"
+    if (run.get("head_repository") or {}).get("full_name") != settings.repo:
+        return "built from a fork"
+
+    event = run.get("event")
+    if event in ("push", "workflow_dispatch"):
+        if run.get("head_branch") != settings.branch:
+            return f"{event} on {run.get('head_branch')}, not {settings.branch}"
+        return Production(ref=f"refs/heads/{settings.branch}")
+    if event == "pull_request":
+        for pr in run.get("pull_requests") or []:
+            if (pr.get("head") or {}).get("sha") == run.get("head_sha"):
+                return Preview(number=int(pr["number"]))
+        return Preview(number=None)
+    return f"not a deploy trigger ({event})"
+
+
+def should_fetch(event: str | None, payload: dict, settings: WallDashSettings) -> str | None:
+    """Cheap filter on the (signed) payload before asking the API, which decides."""
+    if event != "workflow_run":
+        return f"not a workflow_run event ({event})"
+    if payload.get("action") != "completed":
+        return f"run not completed ({payload.get('action')})"
+    if (payload.get("repository") or {}).get("full_name") != settings.repo:
+        return "not the Wall Dash repo"
+    if (payload.get("workflow_run") or {}).get("path") != settings.workflow:
+        return "not the deploy workflow"
+    if not isinstance((payload.get("workflow_run") or {}).get("id"), int):
+        return "no run id"
+    return None
+
+
+# --- Deploying ----------------------------------------------------------------
+
+
+@dataclass
+class Result:
+    kind: str  # "production" or "preview"
+    commit: str
+    run_id: int
+    run_url: str
+    devices: list[str]
+    log_index: str | None
+    number: int | None = None
+    files_written: int = 0
+    assets_pruned: int = 0
+    integration_changed: bool = False
+    previews_removed: list[int] = field(default_factory=list)
+
+
+def handle_run(
+    run_id: int,
+    settings: WallDashSettings,
+    notify_settings: NotifySettings,
+    gh: GitHub | None = None,
+    verifier=None,
+) -> Result | None:
+    """Background task: deploy one finished run, if it's one to deploy."""
+    gh = gh or GitHub(settings.github_token or "", settings.repo)
+    run: dict = {"id": run_id}
+    with _lock, logfire.span("Wall Dash run {run_id}", run_id=run_id):
         try:
-            result = _deploy(run, settings)
+            run = gh.run(run_id)
+            target = classify(run, settings)
+            if isinstance(target, str):
+                logfire.info("Not deploying run {run_id}: {reason}", run_id=run_id, reason=target)
+                return None
+            if isinstance(target, Preview):
+                target = _resolve_preview(target, run, gh)
+                if target is None:
+                    return None
+            result = _deploy_run(run, target, settings, gh, verifier)
         except Exception as e:
             logfire.error("Wall Dash deploy failed", _exc_info=True)
-            _discord_failure(run, settings, e)
-            return
-        logfire.info(
-            "Deployed Wall Dash {commit}",
-            commit=commit[:7],
-            files_written=result.files_written,
-            assets_pruned=result.assets_pruned,
-            integration_changed=result.integration_changed,
-        )
-        _tell_home_assistant(result)
-        _discord_success(result, settings)
+            commit = (run.get("head_sha") or "")[:7]
+            notify.failure(
+                notify_settings,
+                f"Wall Dash deploy failed ({commit or f'run {run_id}'})",
+                e,
+                run.get("html_url"),
+            )
+            return None
+
+        try:
+            result.previews_removed = sweep_previews(settings, gh.open_pull_numbers())
+        except Exception:
+            logfire.error("Couldn't sweep old Wall Dash previews", _exc_info=True)
+        _record(result, settings)
+        logfire.info("Deployed Wall Dash {kind} {commit}", kind=result.kind, commit=result.commit[:7])
+        if result.kind == "production":
+            _tell_home_assistant(result)
+        _discord_success(result, settings, notify_settings)
+        return result
 
 
-def _deploy(run: dict, settings: Settings) -> DeployResult:
-    if not settings.github_token:
-        raise RuntimeError("wall_dash_github_token isn't set")
-    parent = os.path.dirname(os.path.normpath(settings.www_dir))
-    os.makedirs(parent, exist_ok=True)
+def _resolve_preview(target: Preview, run: dict, gh: GitHub) -> Preview | None:
+    number = target.number
+    if number is None:
+        owner = gh.repo.split("/")[0]
+        number = gh.pull_for_branch(owner, run.get("head_branch") or "")
+    if number is None:
+        logfire.info("No open PR for run {run_id}", run_id=run.get("id"))
+        return None
+    pr = gh.pull(number)
+    if pr.get("state") != "open":
+        logfire.info("PR {number} is closed; not deploying its preview", number=number)
+        return None
+    return Preview(number=number)
+
+
+def _deploy_run(
+    run: dict, target: Production | Preview, settings: WallDashSettings, gh: GitHub, verifier
+) -> Result:
+    is_production = isinstance(target, Production)
+    dest_root = (
+        os.path.dirname(os.path.normpath(settings.www_dir)) if is_production else settings.preview_dir
+    )
+    os.makedirs(dest_root, exist_ok=True)
     # Unpack beside the target, on the same filesystem, so files move in with a rename
-    staging = tempfile.mkdtemp(prefix=".wall-dash-deploy-", dir=parent)
+    staging = tempfile.mkdtemp(prefix=".wall-dash-deploy-", dir=dest_root)
     try:
-        tarball = os.path.join(staging, TARBALL_NAME)
-        _download_artifact(run, settings.github_token, tarball)
-        unpacked = os.path.join(staging, "unpacked")
-        with tarfile.open(tarball) as tar:
-            tar.extractall(unpacked, filter="data")
+        with gh.download_artifact(run["id"], ARTIFACT_NAME, os.path.join(staging, "a.zip")) as z:
+            names = set(z.namelist())
+            for needed in (TARBALL_NAME, BUNDLE_NAME):
+                if needed not in names:
+                    raise RuntimeError(f"artifact has no {needed}")
+            tarball, bundle = z.read(TARBALL_NAME), z.read(BUNDLE_NAME)
+        os.remove(os.path.join(staging, "a.zip"))
 
+        # Nothing is unpacked until the signature checks out
+        verified = provenance.verify(
+            tarball,
+            bundle,
+            provenance.Expected(
+                repo=settings.repo,
+                workflow=settings.workflow,
+                ref=target.ref,
+                run_id=run["id"],
+                # A PR build checks out GitHub's merge commit, not the head
+                commit=run["head_sha"] if is_production else None,
+            ),
+            verifier=verifier,
+        )
+
+        unpacked = os.path.join(staging, "unpacked")
+        with tarfile.open(fileobj=io.BytesIO(tarball)) as tar:
+            tar.extractall(unpacked, filter="data")
         www = os.path.join(unpacked, "www")
         integration = os.path.join(unpacked, "custom_components", "wall_dash")
         if not os.path.isfile(os.path.join(www, "index.html")):
@@ -170,77 +239,55 @@ def _deploy(run: dict, settings: Settings) -> DeployResult:
         if not os.path.isfile(os.path.join(integration, "manifest.json")):
             raise RuntimeError("artifact has no custom_components/wall_dash/manifest.json")
         _check_version(www, run)
-
         devices = sorted(
-            d
-            for d in os.listdir(www)
-            if os.path.isfile(os.path.join(www, d, "index.html"))
+            d for d in os.listdir(www) if os.path.isfile(os.path.join(www, d, "index.html"))
         )
-        files_written = _copy_www(www, settings.www_dir)
-        assets_pruned = _prune_assets(settings.www_dir, time.time() - ASSET_MAX_AGE)
-        integration_changed = _swap_integration(integration, settings.integration_dir)
+
+        result = Result(
+            kind="production" if is_production else "preview",
+            commit=run["head_sha"],
+            run_id=run["id"],
+            run_url=run.get("html_url") or "",
+            devices=devices,
+            log_index=verified.log_index,
+        )
+        if is_production:
+            result.files_written = _copy_www(www, settings.www_dir)
+            result.assets_pruned = _prune_assets(settings.www_dir, time.time() - ASSET_MAX_AGE)
+            result.integration_changed = _swap_integration(integration, settings.integration_dir)
+        else:
+            result.number = target.number
+            _deploy_preview(www, target.number, settings.preview_dir)
+            # Says whether the preview is missing an integration change
+            result.integration_changed = _tree_hash(integration) != _tree_hash(
+                settings.integration_dir
+            )
+        _keep_bundle(bundle, run, settings)
+        return result
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
-    return DeployResult(
-        commit=run["head_sha"],
-        branch=run.get("head_branch") or "",
-        run_url=run.get("html_url") or "",
-        devices=devices,
-        files_written=files_written,
-        assets_pruned=assets_pruned,
-        integration_changed=integration_changed,
-    )
-
-
-def _download_artifact(run: dict, token: str, dest: str) -> None:
-    headers = {**GITHUB_API_HEADERS, "Authorization": f"Bearer {token}"}
-    # httpx drops Authorization when the download redirects to blob storage
-    with httpx.Client(headers=headers, follow_redirects=True, timeout=60) as client:
-        listing = client.get(run["artifacts_url"], params={"name": ARTIFACT_NAME})
-        listing.raise_for_status()
-        artifacts = [
-            a
-            for a in listing.json().get("artifacts", [])
-            if a.get("name") == ARTIFACT_NAME and not a.get("expired")
-        ]
-        if not artifacts:
-            raise RuntimeError(f"run has no unexpired '{ARTIFACT_NAME}' artifact")
-
-        zip_path = dest + ".zip"
-        with client.stream("GET", artifacts[0]["archive_download_url"]) as response:
-            response.raise_for_status()
-            with open(zip_path, "wb") as f:
-                for chunk in response.iter_bytes():
-                    f.write(chunk)
-
-    with zipfile.ZipFile(zip_path) as z:
-        if TARBALL_NAME not in z.namelist():
-            raise RuntimeError(f"artifact doesn't contain {TARBALL_NAME}")
-        with z.open(TARBALL_NAME) as src, open(dest, "wb") as out:
-            shutil.copyfileobj(src, out)
-    os.remove(zip_path)
-
 
 def _check_version(www: str, run: dict) -> None:
-    """The build stamps its commit into version.json: make sure it's this run's."""
-    try:
-        with open(os.path.join(www, "version.json")) as f:
-            built = json.load(f).get("commit")
-    except FileNotFoundError:
-        return
-    if built and built != run.get("head_sha"):
-        raise RuntimeError(f"artifact is {built[:7]}, run is {run.get('head_sha', '')[:7]}")
+    """The build stamps the commit it built into version.json: make sure it's this run's."""
+    with open(os.path.join(www, "version.json")) as f:
+        version = json.load(f)
+    built = version.get("head") or version.get("commit")
+    if built != run.get("head_sha"):
+        raise RuntimeError(f"artifact is {str(built)[:7]}, run is {run.get('head_sha', '')[:7]}")
 
 
-def _copy_www(src: str, dest: str) -> int:
-    """Move src's files over dest's, entry points last. Returns files written."""
+def _walk_files(src: str) -> list[str]:
     files = []
     for root, _, names in os.walk(src):
         for name in names:
             files.append(os.path.relpath(os.path.join(root, name), src))
-    files.sort(key=lambda rel: (os.path.basename(rel) in ENTRY_FILES, rel))
+    return files
 
+
+def _copy_www(src: str, dest: str) -> int:
+    """Move src's files over dest's, entry points last. Returns files written."""
+    files = sorted(_walk_files(src), key=lambda rel: (os.path.basename(rel) in ENTRY_FILES, rel))
     written = 0
     now = time.time()
     for rel in files:
@@ -307,7 +354,88 @@ def _swap_integration(src: str, dest: str) -> bool:
     return True
 
 
-def _tell_home_assistant(result: DeployResult) -> None:
+def _sync_shared(src: str, dest: str) -> None:
+    """Copy src's files into dest where they differ (no deletions)."""
+    for rel in _walk_files(src):
+        source, target = os.path.join(src, rel), os.path.join(dest, rel)
+        if os.path.isfile(target) and filecmp.cmp(source, target, shallow=False):
+            continue
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        tmp = target + ".tmp"
+        shutil.copyfile(source, tmp)
+        os.replace(tmp, target)
+
+
+def _deploy_preview(www: str, number: int, preview_dir: str) -> None:
+    emoji = os.path.join(www, "emoji")
+    if os.path.isdir(emoji):
+        _sync_shared(emoji, os.path.join(preview_dir, SHARED_EMOJI))
+        shutil.rmtree(emoji)
+    os.symlink(os.path.join("..", SHARED_EMOJI), emoji)
+
+    target = os.path.join(preview_dir, str(number))
+    outgoing = os.path.join(preview_dir, f".{number}.old")
+    shutil.rmtree(outgoing, ignore_errors=True)
+    if os.path.isdir(target):
+        os.rename(target, outgoing)
+    os.rename(www, target)
+    shutil.rmtree(outgoing, ignore_errors=True)
+
+
+def remove_preview(number: int, settings: WallDashSettings) -> bool:
+    path = os.path.join(settings.preview_dir, str(int(number)))
+    if not os.path.isdir(path):
+        return False
+    shutil.rmtree(path)
+    logfire.info("Removed Wall Dash preview {number}", number=number)
+    return True
+
+
+def sweep_previews(settings: WallDashSettings, open_numbers: set[int]) -> list[int]:
+    """Remove previews of PRs that aren't open."""
+    if not os.path.isdir(settings.preview_dir):
+        return []
+    removed = []
+    for name in os.listdir(settings.preview_dir):
+        if name.isdigit() and int(name) not in open_numbers:
+            remove_preview(int(name), settings)
+            removed.append(int(name))
+    return sorted(removed)
+
+
+# --- Afterwards -----------------------------------------------------------------
+
+
+def _keep_bundle(bundle: bytes, run: dict, settings: WallDashSettings) -> None:
+    try:
+        bundles = os.path.join(settings.state_dir, "bundles")
+        os.makedirs(bundles, exist_ok=True)
+        name = f"{run['id']}-{run.get('run_attempt', 1)}-{run['head_sha'][:7]}.sigstore.json"
+        with open(os.path.join(bundles, name), "wb") as f:
+            f.write(bundle)
+    except OSError:
+        logfire.error("Couldn't keep the deploy's Sigstore bundle", _exc_info=True)
+
+
+def _record(result: Result, settings: WallDashSettings) -> None:
+    try:
+        os.makedirs(settings.state_dir, exist_ok=True)
+        entry = {
+            "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "kind": result.kind,
+            "pr": result.number,
+            "commit": result.commit,
+            "run": result.run_url,
+            "rekor_log_index": result.log_index,
+            "integration_changed": result.integration_changed,
+        }
+        with open(os.path.join(settings.state_dir, "deploys.jsonl"), "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        logfire.error("Couldn't record the deploy", _exc_info=True)
+
+
+def _tell_home_assistant(result: Result) -> None:
     """Fire wall_dash_deployed, and ask for a restart if the integration changed.
 
     Needs `homeassistant_api: true`; outside HA (no SUPERVISOR_TOKEN) it's skipped.
@@ -317,15 +445,12 @@ def _tell_home_assistant(result: DeployResult) -> None:
         return
     try:
         with httpx.Client(
-            base_url=SUPERVISOR_CORE_API,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=10,
+            base_url=SUPERVISOR_CORE_API, headers={"Authorization": f"Bearer {token}"}, timeout=10
         ) as ha:
             ha.post(
                 "/events/wall_dash_deployed",
                 json={
                     "commit": result.commit,
-                    "branch": result.branch,
                     "devices": result.devices,
                     "integration_changed": result.integration_changed,
                 },
@@ -337,8 +462,8 @@ def _tell_home_assistant(result: DeployResult) -> None:
                         "notification_id": "wall_dash_deployed",
                         "title": "Wall Dash integration updated",
                         "message": (
-                            f"Deployed `{result.commit[:7]}`, which changes the "
-                            "wall_dash integration. Restart Home Assistant to load it."
+                            f"Deployed `{result.commit[:7]}`, which changes the wall_dash "
+                            "integration. Restart Home Assistant to load it."
                         ),
                     },
                 ).raise_for_status()
@@ -346,47 +471,35 @@ def _tell_home_assistant(result: DeployResult) -> None:
         logfire.error("Couldn't tell Home Assistant about the deploy", _exc_info=True)
 
 
-def _discord(settings: Settings, embed: DiscordEmbed) -> None:
-    if not settings.discord_webhook_url:
-        return
-    mention = f"<@{settings.notify_discord_user}>" if settings.notify_discord_user else None
-    webhook = DiscordWebhook(url=settings.discord_webhook_url, content=mention)
-    webhook.add_embed(embed)
-    try:
-        webhook.execute()
-    except Exception:
-        logfire.error("Failed to post to Discord", _exc_info=True)
-
-
-def _commit_link(settings: Settings, commit: str) -> str:
-    return f"[{commit[:7]}](https://github.com/{settings.repo}/commit/{commit})"
-
-
-def _discord_success(result: DeployResult, settings: Settings) -> None:
-    lines = [
-        f"{_commit_link(settings, result.commit)} on `{result.branch}`",
-        f"Devices: {', '.join(result.devices) or 'none'}",
-        f"{result.files_written} files written, {result.assets_pruned} old assets pruned",
-    ]
-    if result.integration_changed:
-        lines.append("**Integration changed: restart Home Assistant to load it.**")
-    embed = DiscordEmbed(
-        title="Wall Dash deployed", description="\n".join(lines), color="00ff44"
-    )
+def _discord_success(
+    result: Result, settings: WallDashSettings, notify_settings: NotifySettings
+) -> None:
+    commit = f"[{result.commit[:7]}](https://github.com/{settings.repo}/commit/{result.commit})"
+    lines = []
+    if result.kind == "production":
+        title = "Wall Dash deployed"
+        lines += [
+            commit,
+            f"Devices: {', '.join(result.devices) or 'none'}",
+            f"{result.files_written} files written, {result.assets_pruned} old assets pruned",
+        ]
+        if result.integration_changed:
+            lines.append("**Integration changed: restart Home Assistant to load it.**")
+    else:
+        title = f"Wall Dash preview: PR #{result.number}"
+        lines.append(f"{commit} ([PR](https://github.com/{settings.repo}/pull/{result.number}))")
+        base = f"{settings.preview_url}/{result.number}"
+        lines += [f"- [{d}]({base}/{d}/index.html)" for d in result.devices]
+        if result.integration_changed:
+            lines.append("The integration differs from what's live; previews don't deploy it.")
+    if result.log_index:
+        lines.append(
+            f"Signed by run [{result.run_id}]({result.run_url}), "
+            f"[Rekor {result.log_index}](https://search.sigstore.dev/?logIndex={result.log_index})"
+        )
+    if result.previews_removed:
+        lines.append("Removed previews: " + ", ".join(f"#{n}" for n in result.previews_removed))
+    embed = DiscordEmbed(title=title, description="\n".join(lines), color=notify.GREEN)
     if result.run_url:
         embed.set_url(result.run_url)
-    _discord(settings, embed)
-
-
-def _discord_failure(run: dict, settings: Settings, error: Exception) -> None:
-    commit = run.get("head_sha", "")
-    description = (
-        f"{_commit_link(settings, commit)} on `{run.get('head_branch')}`\n"
-        f"```\n{str(error)[-3500:]}\n```"
-    )
-    embed = DiscordEmbed(
-        title="Wall Dash deploy failed", description=description, color="ff005e"
-    )
-    if run.get("html_url"):
-        embed.set_url(run["html_url"])
-    _discord(settings, embed)
+    notify.discord(notify_settings, embed)
