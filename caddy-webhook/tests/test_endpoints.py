@@ -78,23 +78,39 @@ def test_caddy_ignores_other_events(client, main, monkeypatch):
         assert r.status_code == 200 and r.json()["message"].startswith("Ignored"), r.json()
 
 
-def test_caddy_deploys_push(client, main, monkeypatch):
-    from fastapi.responses import JSONResponse
-
-    monkeypatch.setattr(main, "_deploy_caddy", lambda: JSONResponse({"message": "deployed"}))
+def test_caddy_deploys_push_in_background(client, main, monkeypatch):
+    seen = []
+    monkeypatch.setattr(main, "_deploy_caddy", lambda: seen.append("deployed"))
     push = {"ref": "refs/heads/main", "repository": {"full_name": "caraar12345/infra-caddy"}}
-    assert post(client, "/webhook", "push", push, SECRET).json() == {"message": "deployed"}
+    r = post(client, "/webhook", "push", push, SECRET)
+    # Replies before GitHub's 10 s timeout, whatever the deploy does
+    assert r.status_code == 202 and r.json() == {"message": "Deploying"}
+    assert seen == ["deployed"]
 
 
-def test_caddy_errors_stay_vague(client, main, monkeypatch):
+def test_caddy_failures_are_reported_not_returned(client, main, monkeypatch):
     def explode(settings, reload):
         raise RuntimeError("/share/caddy: secret path details")
 
+    failures = []
     monkeypatch.setattr(main.caddy, "deploy", explode)
-    monkeypatch.setattr(main.notify, "failure", lambda *a, **kw: None)
+    monkeypatch.setattr(main.notify, "failure", lambda _s, title, e: failures.append((title, str(e))))
     push = {"ref": "refs/heads/main", "repository": {"full_name": "caraar12345/infra-caddy"}}
     r = post(client, "/webhook", "push", push, SECRET)
-    assert r.status_code == 500 and "share" not in r.text
+    assert r.status_code == 202 and "share" not in r.text
+    assert failures == [("Caddy repo update failed", "/share/caddy: secret path details")]
+
+
+def test_caddy_refusal_is_reported(client, main, monkeypatch):
+    def refuse(settings, reload):
+        raise main.caddy.Refused("history was rewritten")
+
+    failures = []
+    monkeypatch.setattr(main.caddy, "deploy", refuse)
+    monkeypatch.setattr(main.notify, "failure", lambda _s, title, e: failures.append(title))
+    push = {"ref": "refs/heads/main", "repository": {"full_name": "caraar12345/infra-caddy"}}
+    assert post(client, "/webhook", "push", push, SECRET).status_code == 202
+    assert failures == ["Caddy repo update refused"]
 
 
 def test_wall_dash_run_is_checked_in_background(client, main, monkeypatch):

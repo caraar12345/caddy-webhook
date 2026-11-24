@@ -14,7 +14,6 @@ import git
 import logfire
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from starlette.concurrency import run_in_threadpool
 
 from app import caddy, notify, wall_dash
 from app.security import verify_signature
@@ -64,7 +63,7 @@ async def _signed_payload(request: Request, secret: str) -> tuple[str | None, di
 
 
 @app.post("/webhook")
-async def caddy_webhook(request: Request):
+async def caddy_webhook(request: Request, background_tasks: BackgroundTasks):
     event, payload = await _signed_payload(request, CADDY.webhook_secret)
     if event == "ping":
         return {"message": "pong"}
@@ -72,22 +71,23 @@ async def caddy_webhook(request: Request):
     if ignored:
         logfire.info("Ignoring Caddy webhook: {reason}", reason=ignored)
         return {"message": f"Ignored: {ignored}"}
-    # Blocking git and docker work: run it off the event loop
-    return await run_in_threadpool(_deploy_caddy)
+    # GitHub gives up after 10 s and a deploy can take longer; the outcome
+    # goes to Discord and logfire. Sync tasks run in the threadpool.
+    background_tasks.add_task(_deploy_caddy)
+    return JSONResponse(status_code=202, content={"message": "Deploying"})
 
 
-def _deploy_caddy() -> JSONResponse:
+def _deploy_caddy() -> None:
     try:
         outcome = caddy.deploy(CADDY, caddy.docker_reloader(CADDY))
     except caddy.Refused as e:
         logfire.error("Refused to deploy Caddy config: {reason}", reason=str(e))
         notify.failure(NOTIFY, "Caddy repo update refused", e)
-        return JSONResponse(status_code=409, content={"message": "Refused; see Discord"})
+        return
     except Exception as e:
         logfire.error("Failed to update or reload Caddy's config", _exc_info=True)
         notify.failure(NOTIFY, "Caddy repo update failed", e)
-        # Details go to Discord and logfire, not back over the internet
-        return JSONResponse(status_code=500, content={"message": "Failed; see Discord"})
+        return
 
     if outcome.changed:
         message = f"Deployed {outcome.new_commit[:7]} and reloaded Caddy"
@@ -98,10 +98,6 @@ def _deploy_caddy() -> JSONResponse:
     else:
         message = f"Already at {outcome.new_commit[:7]}"
     logfire.info(message)
-    return JSONResponse(
-        status_code=200,
-        content={"message": message, "new_commit": outcome.new_commit, "prev_commit": outcome.prev_commit},
-    )
 
 
 @app.post("/webhook/wall-dash")
